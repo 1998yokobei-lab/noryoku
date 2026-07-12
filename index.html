@@ -123,7 +123,6 @@
 </div>
 
 <script>
-// ランク判定用関数
 function getRank(val) {
     if (val >= 90) return { letter: 'S', color: 'var(--rank-s)' };
     if (val >= 80) return { letter: 'A', color: 'var(--rank-a)' };
@@ -135,7 +134,6 @@ function getRank(val) {
     return { letter: 'G', color: '#747d8c' };
 }
 
-// ページ読み込み時にAPIキーとリストを復元
 window.onload = () => {
     if(localStorage.getItem("gemini_api_key")) {
         document.getElementById("api-key").value = localStorage.getItem("gemini_api_key");
@@ -145,7 +143,7 @@ window.onload = () => {
 
 let currentResult = null;
 
-// AI査定のメイン処理
+// 🔥 エラーガード＆JSON強制化された最新の査定処理
 async function executeAiAssessment() {
     const apiKey = document.getElementById("api-key").value.trim();
     const name = document.getElementById("name").value.trim();
@@ -158,67 +156,62 @@ async function executeAiAssessment() {
         return;
     }
 
-    // APIキーをローカル保存
     localStorage.setItem("gemini_api_key", apiKey);
 
-    // 画面表示コントロール
     document.getElementById("loading-card").classList.remove("hidden");
     document.getElementById("result-card").classList.add("hidden");
 
-    // AIへの超厳密なプロンプト設計（Google検索ツールを有効化して投げる）
-    const prompt = `
-    あなたはプロ野球の超敏腕スカウトであり、パワプロの査定チームのチーフです。
-    Google検索を使用して、必ず【${year}年】の【${name}】（所属リーグ:${league}, ポジション:${position}）の実際の公式打撃成績（試合数、打率、本塁打、打点、盗塁、盗塁成功率、出塁率、長打率、OPS、三振、四球など）を調べてください。
+    const prompt = `【厳格ルール: 挨拶、解説、\`\`\`による囲み、出典URLの記載は一切禁止。出力は以下のJSONオブジェクトのみとすること】
+    Google検索を使用して【${year}年】の【${name}】（所属リーグ:${league}, ポジション:${position}）の実際の公式打撃成績をリサーチし、パワプロ風の能力値（1〜100、およびA〜Gランク）と特殊能力、選手解説コメントを決定してください。
     
-    その成績をベースに、パワプロ風の能力値（1〜100、およびA〜Gランク）と特殊能力、選手解説コメントを決定してください。
-    
-    必ず、以下のJSONフォーマットの文字列【だけ】を返答してください。余計な挨拶や説明、Markdownの \`\`\`json などの囲みは一切出力しないでください。完全な純粋なJSONオブジェクトを返してください。
-
+    必ず以下の構造のJSONデータだけを返してください。
     {
       "meta": "${year}年 ${name} (${league} - ${position})",
-      "meet": 基準値(1-100), "meet_reason": "ミートの査定理由",
-      "power": 基準値(1-100), "power_reason": "パワーの査定理由",
-      "speed": 基準値(1-100), "speed_reason": "走力の査定理由",
-      "arm": 基準値(1-100), "arm_reason": "肩力の査定理由",
-      "defense": 基準値(1-100), "defense_reason": "守備力の査定理由",
-      "catching": 基準値(1-100), "catching_reason": "捕球の査定理由",
+      "meet": 50, "meet_reason": "理由を簡潔に",
+      "power": 50, "power_reason": "理由を簡潔に",
+      "speed": 50, "speed_reason": "理由を簡潔に",
+      "arm": 50, "arm_reason": "理由を簡潔に",
+      "defense": 50, "defense_reason": "理由を簡潔に",
+      "catching": 50, "catching_reason": "理由を簡潔に",
       "special_abilities": [
-        { "name": "特殊能力名1", "star": "★★★★★", "reason": "データやプレースタイルから導いた理由" },
-        { "name": "特殊能力名2", "star": "★★★☆☆", "reason": "データやプレースタイルから導いた理由" }
+        { "name": "能力名", "star": "★★★☆☆", "reason": "理由" }
       ],
-      "ai_comment": "この選手がどんなタイプかを熱く語る解説コメント"
+      "ai_comment": "熱い解説コメント"
     }`;
 
     try {
-        // 無料枠でWeb検索が使える最新モデル「gemini-2.5-flash」を叩く
         const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${apiKey}`, {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({
                 contents: [{ parts: [{ text: prompt }] }],
-                // 🔥 ここでGoogle検索によるグラウンディング（自動検索）を有効化！
-                tools: [{ googleSearch: {} }]
+                tools: [{ googleSearch: {} }],
+                generationConfig: {
+                    responseMimeType: "application/json"
+                }
             })
         });
 
         const data = await response.json();
-        let replyText = data.candidates[0].content.parts[0].text;
         
-        // もしMarkdownのデコレーションが含まれていたら除去する
-        replyText = replyText.replace(/```json/g, "").replace(/```/g, "").trim();
+        if (data.error) {
+            throw new Error(`APIエラー: ${data.error.message}`);
+        }
+
+        let replyText = data.candidates[0].content.parts[0].text;
+        replyText = replyText.substring(replyText.indexOf('{'), replyText.lastIndexOf('}') + 1);
         
         currentResult = JSON.parse(replyText);
         displayResult(currentResult);
 
     } catch (error) {
         console.error(error);
-        alert("AI査定中にエラーが発生したぜ。APIキーが正しいか、またはプロンプトの制限に引っかかっていないか確認してくれ！");
+        alert(`おっと、以下の原因でエラーが出たみたいだ：\n${error.message}\n\n【対策】一回時間を置くか、選手名がマイナーすぎる場合は「大谷翔平」など有名な選手で一度試してみてくれ！`);
     } finally {
         document.getElementById("loading-card").classList.add("hidden");
     }
 }
 
-// 結果を画面にレンダリングする
 function displayResult(result) {
     document.getElementById("result-meta").innerText = result.meta;
 
@@ -256,13 +249,11 @@ function displayResult(result) {
     document.getElementById("result-card").classList.remove("hidden");
 }
 
-// データのローカル保存機能
 function savePlayer() {
     if(!currentResult) return;
     let saved = localStorage.getItem("pawapro_saved_players");
     let players = saved ? JSON.parse(saved) : [];
     
-    // 重複チェック（同じ名前・年度なら上書き）
     players = players.filter(p => p.meta !== currentResult.meta);
     players.push(currentResult);
     
@@ -271,7 +262,6 @@ function savePlayer() {
     renderList();
 }
 
-// リスト表示
 function renderList() {
     let saved = localStorage.getItem("pawapro_saved_players");
     let players = saved ? JSON.parse(saved) : [];
